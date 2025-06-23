@@ -1,65 +1,101 @@
-# Align Your Flow: A PyTorch Implementation
+# Align Your Flow: Text-to-Image Distillation
 
-This repository provides a comprehensive and self-contained PyTorch implementation of the "Align Your Flow" paper (arXiv:2506.14603v1). The script is designed to be a faithful, conceptual reproduction of the paper's core algorithms for research and educational purposes.
-
-It consolidates all major features into a single, runnable Python file, `main.py`, which uses mock U-Net models and `torchvision.datasets.FakeData` to focus purely on the algorithmic details without external dependencies.
+This repository contains the official PyTorch implementation for "Align Your Flow" (arXiv:2506.14603v1), focusing on the advanced text-to-image distillation task. The `train_ayf.py` script is designed to replicate the paper's methodology for distilling large-scale models like FLUX.1 using the Hugging Face ecosystem.
 
 ## Key Features
 
-This implementation includes all the critical components discussed in the paper:
+This implementation is aligned with the paper and includes:
 
--   **Flow Map Distillation**: The core concept of distilling a large teacher model into an efficient few-step student model that learns a "flow map" between any two noise levels.
--   **AYF-EMD Loss (Algorithm 1)**: A full implementation of the AYF-Eulerian Map Distillation loss, including the numerically stable tangent calculation using a Jacobian-vector product (`torch.func.jvp`).
--   **Training Stabilization (Section 3.4)**:
-    -   **Tangent Normalization**: Regularizes the tangent vector to prevent training instability.
-    -   **Regularized Tangent Warmup**: A curriculum strategy that gradually introduces the tangent-matching objective.
--   **Autoguidance (Section 3.3)**: Distillation from an "autoguided" teacher, where a high-quality model is guided by a weaker version of itself to improve sample quality while preserving diversity.
--   **Adversarial Finetuning (Algorithm 2)**: An optional second training stage to further enhance perceptual quality, featuring:
-    -   A faithful **StyleGAN2-inspired Discriminator**.
-    -   The stable **Relativistic Pairing GAN (RpGAN)** loss.
-    -   **R1/R2 Gradient Penalty** on both real and fake images for stabilization.
-    -   **Adaptive Weighting** to dynamically balance the EMD and adversarial losses.
--   **γ-Sampling (Section 5)**: A stochastic multi-step sampling algorithm (gamma-sampling) for inference, allowing for a flexible trade-off between speed and quality.
-
-## How It Works
-
-The script is structured around the two-stage training process described in the paper:
-
-1.  **Stage 1: Distillation (Algorithm 1)**
-    -   The `AlignYourFlow` model, wrapping a student U-Net, is trained to mimic the flow of a pre-trained (mock) teacher model.
-    -   The training is driven by the `get_ayf_emd_loss` function, which calculates the core distillation loss.
-    -   This stage focuses on teaching the student the fundamental structure of the data distribution.
-
-2.  **Stage 2: Adversarial Finetuning (Algorithm 2)**
-    -   The distilled student model from Stage 1 is further finetuned against a StyleGAN2-based discriminator.
-    -   This stage uses a combined loss function: the EMD loss acts as a regularizer, while the adversarial (RpGAN) loss pushes the generator to produce more perceptually realistic images.
+-   **State-of-the-Art Teacher Model**: Utilizes the powerful **FLUX.1** text-to-image transformer from Hugging Face as the teacher model for distillation.
+-   **Large-Scale Data Handling**: Employs the `webdataset` library to efficiently stream and process large, web-scale datasets like `text-to-image-2M`.
+-   **Modern Training Framework**: Integrated with **Hugging Face `accelerate`** for seamless multi-GPU and mixed-precision training.
+-   **Paper-Aligned Algorithms**:
+    -   **AYF-EMD Loss**: The core distillation objective (Algorithm 1) to train the student flow map.
+    -   **Autoguidance**: Distillation from an autoguided teacher to enhance sample quality.
+    -   **Adversarial Finetuning (Algorithm 2)**: An optional second stage using a **StyleGAN2-inspired Discriminator** and the stable **RpGAN loss** with R1/R2 regularization.
 
 ## Requirements
 
-To run this script, you will need a Python environment with PyTorch and a few common libraries.
+To run the training script, you will need a multi-GPU environment with the following packages installed. You can install them using the provided `requirements.txt` file.
 
 ```bash
-pip -r requirements.txt
+pip install -r requirements.txt
 ```
 
-## How to Run
+The key dependencies are:
+- `torch` & `torchvision`
+- `diffusers`
+- `accelerate`
+- `transformers`
+- `webdataset`
+- `tqdm`
+- `matplotlib`
+- `pyyaml`
 
-The script is self-contained and can be run directly from the command line:
+## Setup & Training
+
+The training process is controlled by a YAML configuration file.
+
+### 1. Configure Your Training Run
+
+Create a `config.yaml` file to specify all hyperparameters. An example configuration is provided in `configs/ayf_config.yaml`. You will need to adjust paths and parameters according to your setup.
+
+**Example `config.yaml`:**
+```yaml
+# Model paths (from Hugging Face Hub)
+model:
+  teacher_model_id: "black-forest-labs/FLUX.1-dev"
+  autoguide_model_id: "black-forest-labs/FLUX.1-schnell"
+
+# Dataset configuration
+data:
+  name: "text-to-image-2M"
+  urls: "pipe:curl -L -s [https://huggingface.co/datasets/jackyhate/text-to-image-2M/resolve/main/data_512_2M/data](https://huggingface.co/datasets/jackyhate/text-to-image-2M/resolve/main/data_512_2M/data)_{000000..000000}.tar"
+  num_samples: 42000 
+  resolution: 512
+  num_workers: 4
+
+# Training parameters
+train:
+  output_dir: "./ayf-training-output"
+  num_epochs: 50
+  batch_size_per_gpu: 8
+  gradient_accumulation_steps: 4
+  lr_student: 1.0e-4
+  lr_discriminator: 2.0e-5
+  mixed_precision: "bf16"
+  adversarial_start_epoch: 40
+  adv_loss_weight: 0.1
+  r1_reg_weight: 0.1
+
+# AYF-specific loss parameters
+ayf_loss:
+  p_mean: -0.8
+  p_std: 1.0
+  warmup_iters: 10000
+  tangent_norm_c: 0.1
+  autoguide_weight: 2.0
+```
+
+### 2. Launch Training
+
+Use `accelerate` to launch the distributed training process.
 
 ```bash
-python main.py
+accelerate launch train_ayf.py --config /path/to/your/config.yaml
 ```
 
-The script will:
+The script will handle the two-stage training automatically:
+1.  **Distillation Phase**: Trains the student using the AYF-EMD loss until the `adversarial_start_epoch` is reached.
+2.  **Finetuning Phase**: Activates the discriminator and uses the combined EMD and adversarial losses to complete the training.
 
-1.  Initialize the mock models and the `FakeData` loader.
-2.  Run the Stage 1 distillation process, printing progress.
-3.  Run the Stage 2 adversarial finetuning process, printing progress.
-4.  The current implementation is set for demonstration and does not save image outputs, but the `sample` method and visualization logic can be easily adapted to do so.
+## Generating Images
 
-## Code Structure
+Once a model is trained, use `generate.py` to create images from a checkpoint.
 
--   **`MockUnet`**: A placeholder for a U-Net architecture (like EDM2) used for the student, teacher, and weak teacher models.
--   **`StyleGAN2Discriminator`**: A faithful implementation of the StyleGAN2 discriminator architecture.
--   **`AlignYourFlow` Class**: The main class that orchestrates the training, sampling, and loss calculations, tying all the components together.
+```bash
+python generate.py --checkpoint /path/to/checkpoint/dir/pytorch_model.bin --outdir ./output --num-images 16
+```
+
+The generation script uses the stochastic `y-sampling` (gamma-sampling) method described in the paper.
 
