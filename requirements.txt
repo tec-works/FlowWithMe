@@ -1,0 +1,16 @@
+# Core PyTorch library
+torch
+torchvision
+
+# For data loading and progress bars
+tqdm
+webdataset
+
+# For plotting and visualization
+matplotlib
+
+# Hugging Face ecosystem for models and training
+diffusers
+accelerate
+transformers
+safetensors
